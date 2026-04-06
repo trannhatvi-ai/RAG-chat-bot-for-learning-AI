@@ -1,0 +1,11 @@
+# Bỏ qua Vector DB
+chroma_db/
+
+# Bỏ qua môi trường ảo
+venv/
+env/
+.env
+
+# Bỏ qua cache của Python
+__pycache__/
+*.pyc
