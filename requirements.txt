@@ -9,3 +9,4 @@ langchain_ollama
 streamlit
 flashrank
 chromadb
+rank-bm25
