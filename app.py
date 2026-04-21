@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import base64
+from pathlib import Path
 
 # Import hàm khởi tạo từ file retrieval.py của bạn
 from retrieval import build_answer_style_instruction, get_rag_components
@@ -13,6 +14,69 @@ if "messages" not in st.session_state:
 
 if "show_thinking" not in st.session_state:
     st.session_state.show_thinking = True
+
+ENV_FILE = Path(__file__).resolve().parent / ".env"
+
+
+def _to_bool(raw_value, default=True):
+    if raw_value is None:
+        return default
+    value = str(raw_value).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def read_env_setting(key, default_value=None):
+    # Allow process env to override local .env value.
+    env_raw = os.getenv(key)
+    if env_raw is not None:
+        return env_raw
+
+    if not ENV_FILE.exists():
+        return default_value
+
+    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+        row = line.strip()
+        if not row or row.startswith("#") or "=" not in row:
+            continue
+        k, v = row.split("=", 1)
+        if k.strip() == key:
+            return v.strip().strip('"').strip("'")
+    return default_value
+
+
+def save_env_setting(key, value):
+    lines = []
+    found = False
+
+    if ENV_FILE.exists():
+        lines = ENV_FILE.read_text(encoding="utf-8").splitlines()
+
+    updated_lines = []
+    for line in lines:
+        row = line.strip()
+        if row and not row.startswith("#") and "=" in line:
+            k, _ = line.split("=", 1)
+            if k.strip() == key:
+                updated_lines.append(f"{key}={value}")
+                found = True
+                continue
+        updated_lines.append(line)
+
+    if not found:
+        if updated_lines and updated_lines[-1].strip() != "":
+            updated_lines.append("")
+        updated_lines.append(f"{key}={value}")
+
+    ENV_FILE.write_text("\n".join(updated_lines).rstrip() + "\n", encoding="utf-8")
+
+
+if "ocr_fallback_toggle" not in st.session_state:
+    current_ocr = _to_bool(read_env_setting("OCR_FALLBACK_ENABLED", "true"), default=True)
+    st.session_state.ocr_fallback_toggle = current_ocr
 
 # ================= 2. KHỞI TẠO AI TỪ FILE RETRIEVAL.PY =================
 @st.cache_resource(show_spinner="Đang khởi tạo hệ thống AI...")
@@ -133,6 +197,20 @@ def show_pdf_popup(file_path):
 # ================= 4. GIAO DIỆN NAVBAR BÊN TRÁI =================
 with st.sidebar:
     st.title("⚙️ Điều khiển")
+
+    st.markdown("### OCR Fallback")
+    st.toggle(
+        "Bật OCR khi trang PDF rỗng",
+        key="ocr_fallback_toggle",
+        help="Áp dụng OCR cho các trang không lấy được text layer.",
+    )
+    if st.button("💾 Lưu cài đặt OCR", use_container_width=True):
+        save_env_setting(
+            "OCR_FALLBACK_ENABLED",
+            "true" if st.session_state.ocr_fallback_toggle else "false",
+        )
+        st.success("Đã lưu OCR_FALLBACK_ENABLED vào .env")
+    st.markdown("---")
     
     if st.button("➕ Cuộc trò chuyện mới", use_container_width=True, type="primary"):
         st.session_state.messages = []

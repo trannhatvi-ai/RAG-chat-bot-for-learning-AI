@@ -1,5 +1,6 @@
 import shutil
 import re
+import os
 from pathlib import Path
 
 from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
@@ -7,6 +8,32 @@ from langchain_community.vectorstores import Chroma
 from langchain_ollama import OllamaEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from tqdm import tqdm
+
+
+def _load_env_file(env_path: Path) -> dict:
+    """Load simple KEY=VALUE pairs from .env file."""
+    env_map = {}
+    if not env_path.exists():
+        return env_map
+
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        row = line.strip()
+        if not row or row.startswith("#") or "=" not in row:
+            continue
+        key, value = row.split("=", 1)
+        env_map[key.strip()] = value.strip().strip('"').strip("'")
+    return env_map
+
+
+def _to_bool(raw_value: str | None, default: bool = False) -> bool:
+    if raw_value is None:
+        return default
+    value = str(raw_value).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def load_pdf_documents(data_dir: Path):
@@ -57,7 +84,7 @@ def _ocr_page_text(pdf_path: Path, page_number: int) -> str:
         return ""
 
 
-def clean_documents(documents):
+def clean_documents(documents, enable_ocr_fallback: bool = True):
     """Clean extracted PDF text. OCR fallback only when extracted page text is empty."""
     cleaned_docs = []
     dropped_pages = 0
@@ -66,7 +93,7 @@ def clean_documents(documents):
     for doc in documents:
         text = normalize_text(doc.page_content or "")
 
-        if not text:
+        if not text and enable_ocr_fallback:
             source = Path(str(doc.metadata.get("source", "")))
             page = int(doc.metadata.get("page", 0) or 0)
             ocr_text = _ocr_page_text(source, page)
@@ -120,6 +147,11 @@ def main():
     project_root = Path(__file__).resolve().parent
     papers_dir = project_root / "papers" / "ai_thucchien"
     chroma_dir = project_root / "chroma_db"
+    env_values = _load_env_file(project_root / ".env")
+    ocr_enabled = _to_bool(
+        os.getenv("OCR_FALLBACK_ENABLED", env_values.get("OCR_FALLBACK_ENABLED")),
+        default=True,
+    )
 
     if not papers_dir.exists():
         raise FileNotFoundError(f"Khong tim thay thu muc du lieu: {papers_dir}")
@@ -131,11 +163,13 @@ def main():
     print(f"   Da tai {len(docs)} trang tai lieu.")
 
     print("2) Dang lam sach van ban...")
-    cleaned_docs, clean_stats = clean_documents(docs)
+    print(f"   OCR fallback: {'BAT' if ocr_enabled else 'TAT'}")
+    cleaned_docs, clean_stats = clean_documents(docs, enable_ocr_fallback=ocr_enabled)
     if not cleaned_docs:
         raise ValueError("Tat ca trang PDF rong sau buoc lam sach.")
     print(f"   Da giu {clean_stats['kept_pages']}/{clean_stats['total_pages']} trang hop le.")
-    print(f"   OCR fallback da dung cho {clean_stats['ocr_fallback_used']} trang rong.")
+    if ocr_enabled:
+        print(f"   OCR fallback da dung cho {clean_stats['ocr_fallback_used']} trang rong.")
     if clean_stats["dropped_pages"] > 0:
         print(f"   Bo qua {clean_stats['dropped_pages']} trang khong the trich xuat/OCR.")
 
