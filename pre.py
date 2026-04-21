@@ -1,4 +1,5 @@
 import shutil
+import re
 from pathlib import Path
 
 from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
@@ -18,6 +19,77 @@ def load_pdf_documents(data_dir: Path):
         use_multithreading=True,
     )
     return loader.load()
+
+
+def normalize_text(text: str) -> str:
+    """Basic text cleaning for PDF extraction artifacts."""
+    cleaned = text.replace("\u00a0", " ")
+    # Merge line-break hyphenation: "learn-\ning" -> "learning"
+    cleaned = re.sub(r"(\w)-\n(\w)", r"\1\2", cleaned)
+    # Replace hard line breaks with spaces to rebuild normal sentences.
+    cleaned = re.sub(r"\s*\n\s*", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _ocr_page_text(pdf_path: Path, page_number: int) -> str:
+    """Run OCR for a single page in a PDF. Return empty string on failure."""
+    try:
+        import pytesseract  # type: ignore[import-not-found]
+        from pdf2image import convert_from_path  # type: ignore[import-not-found]
+    except Exception:
+        return ""
+
+    if not pdf_path.exists():
+        return ""
+
+    try:
+        images = convert_from_path(
+            str(pdf_path),
+            first_page=page_number + 1,
+            last_page=page_number + 1,
+        )
+        if not images:
+            return ""
+        ocr_text = pytesseract.image_to_string(images[0], lang="eng+vie")
+        return normalize_text(ocr_text)
+    except Exception:
+        return ""
+
+
+def clean_documents(documents):
+    """Clean extracted PDF text. OCR fallback only when extracted page text is empty."""
+    cleaned_docs = []
+    dropped_pages = 0
+    ocr_fallback_used = 0
+
+    for doc in documents:
+        text = normalize_text(doc.page_content or "")
+
+        if not text:
+            source = Path(str(doc.metadata.get("source", "")))
+            page = int(doc.metadata.get("page", 0) or 0)
+            ocr_text = _ocr_page_text(source, page)
+            if ocr_text:
+                text = ocr_text
+                ocr_fallback_used += 1
+                doc.metadata["extraction_method"] = "ocr_fallback"
+
+        if not text:
+            dropped_pages += 1
+            continue
+
+        doc.metadata.setdefault("extraction_method", "text_layer")
+        doc.page_content = text
+        cleaned_docs.append(doc)
+
+    stats = {
+        "total_pages": len(documents),
+        "kept_pages": len(cleaned_docs),
+        "dropped_pages": dropped_pages,
+        "ocr_fallback_used": ocr_fallback_used,
+    }
+    return cleaned_docs, stats
 
 
 def chunk_documents(documents):
@@ -52,17 +124,26 @@ def main():
     if not papers_dir.exists():
         raise FileNotFoundError(f"Khong tim thay thu muc du lieu: {papers_dir}")
 
-    print("1) Dang tai PDF trong papers/ai_thucchien...")
+    print("1) Dang trich xuat text tu PDF trong papers/ai_thucchien...")
     docs = load_pdf_documents(papers_dir)
     if not docs:
         raise ValueError("Khong tim thay file PDF nao trong thu muc papers.")
     print(f"   Da tai {len(docs)} trang tai lieu.")
 
-    print("2) Dang chunking...")
-    chunks = chunk_documents(docs)
+    print("2) Dang lam sach van ban...")
+    cleaned_docs, clean_stats = clean_documents(docs)
+    if not cleaned_docs:
+        raise ValueError("Tat ca trang PDF rong sau buoc lam sach.")
+    print(f"   Da giu {clean_stats['kept_pages']}/{clean_stats['total_pages']} trang hop le.")
+    print(f"   OCR fallback da dung cho {clean_stats['ocr_fallback_used']} trang rong.")
+    if clean_stats["dropped_pages"] > 0:
+        print(f"   Bo qua {clean_stats['dropped_pages']} trang khong the trich xuat/OCR.")
+
+    print("3) Dang chunking...")
+    chunks = chunk_documents(cleaned_docs)
     print(f"   Da tao {len(chunks)} chunks.")
 
-    print("3) Dang embedding va luu vao ChromaDB...")
+    print("4) Dang embedding va luu vao ChromaDB...")
     rebuild_chroma(chunks, chroma_dir, batch_size=100)
     print(f"Hoan tat. Du lieu da duoc luu tai: {chroma_dir}")
 
