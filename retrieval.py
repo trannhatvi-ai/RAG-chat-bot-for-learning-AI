@@ -1,5 +1,7 @@
+import os
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
+from pathlib import Path
 
 from flashrank import Ranker, RerankRequest
 from langchain_core.documents import Document
@@ -10,6 +12,27 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_community.vectorstores import Chroma
 from langchain_community.retrievers import BM25Retriever
 from langchain_ollama import OllamaEmbeddings
+
+
+# ==================== LangSmith Setup ====================
+def _load_env_file():
+    """Load .env file and set env vars for LangSmith tracing."""
+    env_path = Path(__file__).resolve().parent / ".env"
+    if not env_path.exists():
+        return
+    
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        row = line.strip()
+        if not row or row.startswith("#") or "=" not in row:
+            continue
+        key, value = row.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key.startswith("LANGSMITH"):
+            os.environ[key] = value
+
+
+_load_env_file()
 
 
 DEFAULT_ANSWER_STYLE = (
@@ -131,6 +154,7 @@ def _load_documents_from_chroma(vectorstore: Chroma) -> List[Document]:
 def get_rag_components():
     template = (
         "You are a strict, citation-focused assistant for a private knowledge base. \n"
+        "**IMPORTANT: Always respond in Vietnamese (Tiếng Việt). Never respond in English, Chinese, or any other language.**\n\n"
         "RULES:\n"
         "1. Only use information from the provided context.\n"
         "2. If you don't know the answer, say so.\n"
@@ -144,6 +168,7 @@ def get_rag_components():
         "10. Follow this answer style instruction: {answer_style_instruction}\n"
         "Context:\n{context}\n\n"
         "Question: {question}\n"
+        "Answer in Vietnamese (Tiếng Việt):\n"
     )
 
     # 1. Khởi tạo Embeddings & VectorStore

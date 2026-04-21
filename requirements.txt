@@ -6,9 +6,11 @@ faiss-cpu
 unstructured
 pypdf
 langchain_ollama
-streamlit
+fastapi
+uvicorn
 flashrank
 chromadb
 rank-bm25
 pytesseract
 pdf2image
+langsmith
